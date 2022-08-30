@@ -2,6 +2,7 @@ import json
 import pyodbc
 import warnings
 import pandas as pd
+import numpy as np
 
 class ELOModel:
     def __init__(self) -> None:
@@ -23,13 +24,18 @@ class ELOModel:
         return df
 
 class FiveThirtyEightElo:
-    def __init__(self, home_field_add=55, home_field_dist_add=4, rest_add=25, playoff_mult=1.2) -> None:
+    def __init__(self, home_field_add=55, home_field_dist_add=4, rest_add=25, playoff_mult=1.2, k=20) -> None:
+        """
+        README: https://fivethirtyeight.com/methodology/how-our-nfl-predictions-work/
+        """
         # Get the superclass
         ELOModel.__init__(self)
         self.home_field_add = home_field_add
         self.home_field_dist_add = home_field_dist_add
         self.rest_add = rest_add
         self.playoff_mult = playoff_mult
+        self.k = k
+        # Note: this model does not change the autocorrelation correction for margin of victory
 
         
     def elo_adjustment(self, elo_base, is_home_team, travel_dist=0, coming_off_bye=False, is_playoffs=False) -> float:
@@ -46,24 +52,10 @@ class FiveThirtyEightElo:
         return elo
 
     
-    def get_vegas_line(self, home_team_elo, away_team_elo, denom=25) -> float:
-        # Make ELO Adjustments for each team
-        # Home Team
-        home_team_elo_adj = self.elo_adjustment(
-            elo_base=home_team_elo,
-            is_home_team=True,
-            travel_dist=0,
-            coming_off_bye=False,
-            is_playoffs=False
-        )
-        # Away Team
-        away_team_elo_adj = self.elo_adjustment(
-            elo_base=away_team_elo,
-            is_home_team=False,
-            travel_dist=0,
-            coming_off_bye=False,
-            is_playoffs=False
-        )
+    def get_vegas_line(self, home_team_elo_adj, away_team_elo_adj, denom=25) -> float:
+        """
+        Note: It's assumed that all ELO adjustments have already been made
+        """
 
         # Calculate ELO Difference
         elo_diff = home_team_elo_adj - away_team_elo_adj
@@ -75,7 +67,26 @@ class FiveThirtyEightElo:
 
         # Vegas Line Calc
         vegas_line = -elo_diff/denom
-        return vegas_line
+        return home_team_win_prob, vegas_line
+
+
+    def get_post_game_elos(self, elo_h_pregame, elo_a_pregame, h_score, a_score, h_win_prob):
+        """
+        Takes a certain amount of ELO points from loser and gives to winner
+        """
+        elo_diff = np.abs(elo_h_pregame-elo_a_pregame)
+        point_diff = np.abs(h_score-a_score)
+        mov_mult = np.log(point_diff+1) * ( 2.2/(elo_diff*0.001 + 2.2) )  # Margin of Victory Multiplier - remove autocorr.
+        if h_score > a_score:
+            h_result = 1
+        elif h_score < a_score:
+            h_result = 0
+        else:
+            h_result = 0.5  # tie
+        elo_change = self.k * (h_result - h_win_prob) * mov_mult
+        elo_h_postgame = elo_h_pregame + elo_change
+        elo_a_postgame = elo_a_pregame - elo_change
+        return elo_h_postgame, elo_a_postgame
 
 
 class JohnElo:
@@ -85,10 +96,14 @@ class JohnElo:
         self.exp_ratio = exp_ratio
         self.home_field_add = home_field_add
 
+
     def get_vegas_line(self, home_team_elo, away_team_elo) -> float:
         elo_diff = home_team_elo - away_team_elo
         vegas_line = -(self.coeff*(elo_diff)**(self.exp_ratio) + self.home_field_add)
         return vegas_line
+
+
+    
 
 
 
