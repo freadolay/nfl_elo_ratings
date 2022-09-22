@@ -5,6 +5,9 @@ import pandas as pd
 import numpy as np
 
 class ELOModel:
+    """
+    Base class for the ELO Models defined in this module
+    """
     def __init__(self) -> None:
         # DB INFO
         with open("src/db_access.json") as f:
@@ -23,8 +26,16 @@ class ELOModel:
             df = pd.read_sql(sql_query_str, con=engine)
         return df
 
-class FiveThirtyEightElo:
-    def __init__(self, home_field_add=55, home_field_dist_add=4, rest_add=25, playoff_mult=1.2, k=20) -> None:
+class FiveThirtyEightElo(ELOModel):
+    """
+    fivethirtyeight.com's version of NFL Elo Rankings
+    """
+    def __init__(self,
+                 home_field_add=55,
+                 home_field_dist_add=4,
+                 rest_add=25,
+                 playoff_mult=1.2,
+                 k=20) -> None:
         """
         README: https://fivethirtyeight.com/methodology/how-our-nfl-predictions-work/
         """
@@ -37,8 +48,13 @@ class FiveThirtyEightElo:
         self.k = k
         # Note: this model does not change the autocorrelation correction for margin of victory
 
-        
-    def elo_adjustment(self, elo_base, is_home_team, travel_dist=0, coming_off_bye=False, is_playoffs=False) -> float:
+
+    def elo_adjustment(self,
+                       elo_base,
+                       is_home_team,
+                       travel_dist=0,
+                       coming_off_bye=False,
+                       is_playoffs=False) -> float:
         """
         travel_dist = distance in miles
         home_field_dist_add = multiplier per 1000 miles
@@ -89,23 +105,69 @@ class FiveThirtyEightElo:
         return elo_h_postgame, elo_a_postgame
 
 
-class JohnElo:
-    def __init__(self, coeff=0.075, exp_ratio=(699/999), home_field_add=1.5) -> None:
+    def evaluate_season(self, season):
+        """
+        Evaluate an entire season with data from DB.. TODO!
+        """
+
+
+class JohnElo(ELOModel):
+    """
+    John W's version of NFL Elo Rankings
+    """
+    def __init__(self, coeff=0.075, exp_ratio=(699/999), home_field_add=1.5,margin_pct=0.02, h_a_pct=0.95, elo_adj_exp_ratio=0.25) -> None:
         ELOModel.__init__(self)
         self.coeff = coeff
         self.exp_ratio = exp_ratio
         self.home_field_add = home_field_add
+        self.margin_pct = margin_pct  # (Multiplier) How much wins affects elo change
+        self.h_a_pct = h_a_pct  # (Multiplier) How much being at home/away affects elo change
+        self.elo_adj_exp_ratio = elo_adj_exp_ratio
 
 
     def get_vegas_line(self, home_team_elo, away_team_elo) -> float:
+        """
+        Gets the vegas line (home team) for the ELO Model
+        """
         elo_diff = home_team_elo - away_team_elo
         vegas_line = -(self.coeff*(elo_diff)**(self.exp_ratio) + self.home_field_add)
         return vegas_line
 
 
-    
+    def get_post_game_elos(self, elo_h_pregame, elo_a_pregame, h_score, a_score):
+        """
+        Takes a certain amount of ELO points from loser and gives to winner
+        """
+        # Coeff A
+        if h_score > a_score:
+            coeff_a = self.margin_pct*self.h_a_pct*elo_a_pregame
+        else:
+            coeff_a = -self.margin_pct*self.h_a_pct*elo_h_pregame
+
+        # Coeff B
+        if h_score > a_score:
+            if elo_h_pregame > elo_a_pregame:
+                coeff_b = 1-(elo_h_pregame-elo_a_pregame)/elo_h_pregame
+            elif elo_a_pregame > elo_h_pregame:
+                coeff_b = 1+(elo_a_pregame-elo_h_pregame)/elo_a_pregame
+            else:
+                coeff_b = 1
+        else:
+            if elo_h_pregame > elo_a_pregame:
+                coeff_b = 1+(elo_h_pregame-elo_a_pregame)/elo_h_pregame
+            elif elo_a_pregame > elo_h_pregame:
+                coeff_b = 1-(elo_a_pregame-elo_h_pregame)/elo_a_pregame
+            else:
+                coeff_b = 1
+
+        # Run Calculation
+        home_team_elo_change = coeff_a*coeff_b**self.elo_adj_exp_ratio
+        elo_h_post_game = elo_h_pregame + home_team_elo_change
+        elo_a_post_game = elo_a_pregame - home_team_elo_change
+        return elo_h_post_game, elo_a_post_game
 
 
-
-
-    
+    def evaluate_season(self, season):
+        """
+        Evaluate an entire season with data from DB.. TODO!
+        """
